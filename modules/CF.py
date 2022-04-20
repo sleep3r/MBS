@@ -1,15 +1,22 @@
-import numpy as np
-import numpy_financial as npf
-import matplotlib.pyplot as plt
-import pandas as pd
-import modules.L as Generate_Prepayment_Rate
-
 from itertools import chain
+
+import numpy as np
+import pandas as pd
+import numpy_financial as npf
+from tqdm import tqdm
+
+import modules.L as L
 
 
 class Loan_Portfolio:
-    def __init__(self, discount_rate, loan_df, cashflows_dataframe=None, aggregate_flows_df=None,
-                 tranchwise_flow_df=None):
+    def __init__(
+            self,
+            discount_rate,
+            loan_df,
+            cashflows_dataframe=None,
+            aggregate_flows_df=None,
+            tranchwise_flow_df=None
+    ):
         # Assuming single discount rate at time t0 for NPV calculation/to get price
         self.discount_rate = discount_rate
         # initialize loan dataframe; Current principal bal, interest rate and term from loan database
@@ -86,7 +93,7 @@ class Loan_Portfolio:
                      'tranche',
                      'principal'))
 
-        for i in range(1, 361):
+        for i in tqdm(range(1, 361), desc='Tranchwise Flow'):
             total_scheduled_principal_tranchwise = 0
             total_interest_tranchwise = 0
             total_prepayment_tranchwise = 0
@@ -94,7 +101,8 @@ class Loan_Portfolio:
             period_list_loan = []
             period_list_tranchwise = []
             last_period = []
-            for j, loan_row in loan_df.iterrows():
+
+            for j, loan_row in self.loan_df.iterrows():
                 loan_pk_num = int(loan_row.name)
                 orig_bal_t = float(loan_row['Current_Principal_Balance'])
                 int_rate_t = float(loan_row['Current_Interest_Rate'])
@@ -221,26 +229,7 @@ class Loan_Portfolio:
             else:
                 print("loop complete")
                 tranchwise_df = tranchwise_df.append(periodwise_df)
-
-            tranchwise_cf_df = pd.DataFrame()
-
-            # total_scheduled_principal_tranchwise+=p['scheduled_principal']
-            # total_interest_tranchwise+=p['interest']
-            # total_prepayment_tranchwise+=["prepayment"]
-
-        # period = dict(
-        # loan_df_pk=loan_df_pk,
-        # period=period_num,
-        # start_balance=start_balance,
-        # remaining_term=remaining_term,
-        # interest=interest,
-        # payment=payment,
-        # scheduled_principal=scheduled_principal,
-        # prepayment=prepayment,
-        # defaults=defaults,
-        # end_balance=end_balance,
-        # recovery=recovery,
-        # tranche=tranche
+            return tranchwise_df
 
     def cashflow_loss(self):
         # create a column for loss for each cashflow and return that
@@ -267,23 +256,18 @@ class Loan_Portfolio:
         return self.aggregate_flows_df['total_interest'].sum()
 
     def scheduled_principal_aggregate_for_portfolio(self):
-
         return self.aggregate_flows_df['scheduled_principal'].sum()
 
     def unscheduled_principal_aggregate_for_portfolio(self):
-
         return self.aggregate_flows_df['prepayment'].sum()
 
     def defaults__aggregate_for_portfolio(self):
-
         return self.aggregate_flows_df['defaults'].sum()
 
     def losses_aggregate_for_portfolio(self):
-
         return self.aggregate_flows_df['loss'].sum()
 
     def recovery_aggregate_for_portfolio(self):
-
         return self.aggregate_flows_df['recovery'].sum()
 
     # continue from line 160
@@ -312,18 +296,21 @@ class Loan_Portfolio:
         ].sum().reset_index()
         return self.aggregate_flows_df
 
-    def cash_flow_tranches(self, field_list=('start_balance',
-                                             'scheduled_principal',
-                                             'prepayment',
-                                             'interest',
-                                             'defaults',
-                                             'recovery',
-                                             'loss',
-                                             'total_interest',
-                                             'total_principal',
-                                             'total_payments'
-                                             )
-                           ):
+    def cash_flow_tranches(
+            self,
+            field_list=(
+                    'start_balance',
+                    'scheduled_principal',
+                    'prepayment',
+                    'interest',
+                    'defaults',
+                    'recovery',
+                    'loss',
+                    'total_interest',
+                    'total_principal',
+                    'total_payments'
+            )
+    ):
         self.tranchwise_flow_df = self.cashflows_dataframe.groupby(['period', 'tranche'])[
             field_list
         ].sum(lambda x: tuple(x)).reset_index()
@@ -384,6 +371,8 @@ class Loan_Portfolio:
             cashflow_senior=0)
         period_list.append(period_0)
         senior_prin, junior_prin, net_int_tranch_senior, net_int_tranch_junior = 0, 0, 0, 0
+
+        wac = self.loan_df["Current_Interest_Rate"].mean()
         while j < N:
             if tranch_senior_outstanding_bal < 0:
                 tranch_senior_outstanding_bal = 0
@@ -395,12 +384,9 @@ class Loan_Portfolio:
             mortgage_pay_tranch_junior = -npf.pmt(WAC_junior_tranch / 12, N - j, start_junior, when='end')
             principal_tranch_senior = mortgage_pay_tranch_senior - net_int_tranch_senior
             principal_tranch_junior = mortgage_pay_tranch_junior - net_int_tranch_junior
-            x = Generate_Prepayment_Rate.select_prepayment_method(0)
 
-            if x == 'b':
-                cpr = Generate_Prepayment_Rate.generate_CPR_PSA(j, N)
-            else:
-                cpr = Generate_Prepayment_Rate.a.iloc[j]
+            paths = L.generate_CPR(wac=wac, simulations=5)
+            cpr = np.mean(paths, axis=0)[j]
 
             prepayment_senior = tranch_senior_outstanding_bal * cpr / 12
             defaults_senior = tranch_senior_outstanding_bal * cdr1 / 12
@@ -410,7 +396,6 @@ class Loan_Portfolio:
             recovery_junior = defaults_junior * recovery_junior_rate
             ###recovery = recovery_percentage * defaults
             # assuming sequential pay and junior tranche is I/O till principal in  tranche 1 is retired
-
             if ((
                     tranch_junior_outstanding_bal - defaults_junior) > defaults_senior and tranch_senior_outstanding_bal > 0 \
                     and tranch_senior_outstanding_bal > (
@@ -508,7 +493,6 @@ class Loan_Portfolio:
         ##
         list_age = [[average_age_senior, average_age_junior, average_age]]
         age_df = pd.DataFrame(list_age, columns=['Senior', 'Junior', 'Total'])
-        print(age_df)
         return final_df
 
 
@@ -565,7 +549,7 @@ def payment_schedule_for_loan(loan_df_pk, original_balance, interest_rate, matur
     )
     period_list[0] = period_0
 
-    for i in range(1, maturity + 1):
+    for i in tqdm(range(1, maturity + 1), desc="Calculating Payments"):
         last_period = period_list[i - 1]
 
         period = create_payment_schedule_period(
@@ -611,11 +595,9 @@ def create_payment_schedule_period(
         payment = start_balance
     scheduled_principal = payment - interest
 
-    x = Generate_Prepayment_Rate.select_prepayment_method(0)
-    if x == 'b':
-        cpr = Generate_Prepayment_Rate.generate_CPR_PSA(period_num, N)
-    else:
-        cpr = Generate_Prepayment_Rate.a.iloc[period_num]
+    paths = L.generate_CPR(simulations=5)
+    cpr = np.mean(paths, axis=0)[period_num]
+
     prepayment = start_balance * cpr / 12
     defaults = start_balance * cdr / 12
     end_balance = start_balance - scheduled_principal - prepayment - defaults
@@ -639,7 +621,6 @@ def create_payment_schedule_period(
         recovery=recovery,
         tranche=tranche
     )
-
     return period
 
 
@@ -659,22 +640,3 @@ def calculate_monthly_payment(start_balance, monthly_interest_rate, term):
     denominator = ((1 + monthly_interest_rate) ** term - 1)
     payment = numerator / denominator * 1.0
     return payment
-
-
-def isfloat(x):
-    try:
-        float(x)
-    except ValueError:
-        return False
-    else:
-        return True
-
-
-def isint(x):
-    try:
-        a = float(x)
-        b = int(a)
-    except ValueError:
-        return False
-    else:
-        return a == b

@@ -1,96 +1,47 @@
-# create a PSA Assumption model that would determine the Conditional prepayment rate instead of a constant prepayment rate
-# prepayment speed assumption that will be linked to the risk model....!
-import math
-from datetime import datetime, timedelta
-
 import numpy as np
-import pandas as pd
-from mpl_toolkits import mplot3d
-from scipy.stats import norm
-from matplotlib import pyplot as plt
-from dateutil.relativedelta import relativedelta
 
 import modules.IR as IR
 
 
-def select_prepayment_method(q):
-    if q == 0:
-        type = 'h'
-    if q == 1:
-        type = 'b'
-    return type
+def generate_CPR(
+        wac=0.1,
+        T=30,
+        notional=100000,
+        r0=0.078,
+        kappa=0.6,
+        r_bar=0.08,
+        sigma=0.12,
+        simulations=5000
+) -> np.ndarray:
+    period = int(T * 12)  # months
+    dt = 1 / 360.
+    rm = wac / 12.
 
+    PV = np.zeros((simulations, period + 1))
+    PV[:, 0] = notional
+    c = np.zeros((simulations, period))
+    SY = [0.94, 0.76, 0.74, 0.95, 0.98, 0.92, 0.98, 1.10, 1.18, 1.22, 1.23, 0.98]
 
-def generate_CPR_PSA(i, N, PSA=2):
-    # N=Maturity
-    # i=period
-    for i in range(int(N)):
-        if N < 360:
-            k = 360 - N + 1
-        else:
-            k = 0
+    cir_mat = IR.CIR(T, r0, kappa, sigma, r_bar, simulations)
 
-    i = i
-    k = k
-    if i + k <= 30:
-        CPR = 0.06 * (i + k) / 30 * PSA
-        SMM = 1 - (1 - CPR) ** (1 / 12)
-    else:
-        CPR = 0.06 * PSA
-        SMM = 1 - (1 - CPR) ** (1 / 12)
-    return CPR
+    for i in range(period):
+        # compute CPR
+        BU = 0.3 + 0.7 * (PV[:, i] / PV[:, 0])
+        SG = min(1, (i + 1) / 30.)
+        SY_i = SY[i % 12]
+        P10 = IR.ZCB_CIR(10, kappa, sigma, r_bar, cir_mat[:, i * 30])
+        r10 = -1 / 10. * np.log(P10)
+        RI = 0.28 + 0.14 * np.arctan(-8.57 + 430 * (wac - r10))
+        CPR = BU * SG * SY_i * RI
 
+        IP = PV[:, i] * rm
+        SP = PV[:, i] * rm * (1 / (1 - pow(1 + rm, -period + i)) - 1.)
+        PP = (PV[:, i] - SP) * (1 - pow(1 - CPR, 1 / 12.))
+        PV[:, i + 1] = PV[:, i] - SP - PP
+        c[:, i] = CPR
 
-def generate_CPR_HullWhite():
-    x = IR.HW_model_two_factor()
-    series = pd.read_csv('Dates.csv')
-    z = pd.DataFrame()
-    z['Date'] = (series['Date'])
-
-    # plt.plot(x)
-    # plt.title("Simulated Interest Rate Paths")
-    # plt.xlabel("Time in months")
-    # plt.ylabel("Interest Rate")
-
-    mean_rate = np.mean(x, axis=1)
-
-    two_year = x.iloc[24]
-    ten_year = x.iloc[120]
-    HW_mortage_rate = 0.024 + 2 * two_year + 0.6 * ten_year
-
-    # CPR=RefiIncentive∗SeasoningMultiplier∗SeasonalityMultiplier
-
-    G2PP_Refi = []
-    for j in HW_mortage_rate:
-        G2PP_Refi.append(.2406 - .1389 * math.atan(5.952 * (1.089 - 0.06 / j)))
-
-    # plt.plot(G2PP_Refi)
-
-    seasoning = np.ones(361)
-    for i in range(30):
-        seasoning[i] = 1 / 30 * i
-
-    # mathworks
-    # Keys->Months
-
-    seasonality = {
-        1: .94, 2: .76, 3: .73, 4: 0.96, 5: .98, 6: .92, 7: .99, 8: 1.1, 9: 1.18, 10: 1.21, 11: 1.23, 12: .97
-    }
-
-    # CPR=RefiIncentive∗SeasoningMultiplier∗SeasonalityMultiplier
-    CPR = pd.DataFrame()
-    for k, path in enumerate(x):
-        row = []
-        for j, i in enumerate(series['Date']):
-            date_i = i
-            mon = ((date_i.split("/"))[0])
-            row.append(G2PP_Refi[k] * seasoning[j] * seasonality[int(mon)])
-        CPR[k] = row
-
-    cpr_df = np.mean(CPR, axis=1)
-    # plt.plot(CPR)
-    # plt.plot(cpr_df)
-    # plt.title("Prepayment Path using Hull White Interest Rate Model")
-    # plt.xlabel("Time in months")
-    # plt.ylabel("Prepayment Rate")
-    return cpr_df
+    step = 30 * np.arange(1, period + 1, 1)
+    R_cir = np.array([dt * np.sum(cir_mat[:, 1:j], axis=1) for j in step]).T
+    disc = np.exp(-R_cir)
+    disc_c = disc * c
+    return disc_c
