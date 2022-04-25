@@ -17,7 +17,7 @@ class MBS_pricing:
 
         loan_total_payments_futurevalue = loan_cashflows['total_payments']
 
-        discounting_rate = IR.CIR()
+        discounting_rate = IR.CIR()[0]
         size = len(loan_total_payments_futurevalue)
 
         self.discounting_rate1 = discounting_rate[:size]
@@ -31,13 +31,11 @@ class MBS_pricing:
         discounted_tranch_junior = pd.DataFrame()
         discounted_tranch_total = pd.DataFrame()
 
-        for i in self.discounting_rate4:
+        for i, r in enumerate(self.discounting_rate4):
             discounted_tranch_senior[i] = (npf.pv(self.discounting_rate4[i], self.tranch_cashflow['period'], 0,
                                                   -self.tranch_cashflow['cashflow_senior']))
-        for i in self.discounting_rate4:
             discounted_tranch_junior[i] = (npf.pv(self.discounting_rate4[i], self.tranch_cashflow['period'], 0,
                                                   -self.tranch_cashflow['cashflow_junior']))
-        for i in self.discounting_rate4:
             discounted_tranch_total[i] = (npf.pv(self.discounting_rate4[i], self.tranch_cashflow['period'], 0,
                                                  -self.tranch_cashflow['total_cashflow']))
 
@@ -46,7 +44,7 @@ class MBS_pricing:
         self.npv_mbs_total = np.sum(discounted_tranch_senior)
 
     def plot_mbs_value(self):
-        x4 = np.mean(self.discounting_rate4)
+        x4 = self.discounting_rate4
 
         plt.scatter(x4, self.npv_mbs_total)
         plt.title("Price-Yield Relationship - Total MBS")
