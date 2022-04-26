@@ -13,29 +13,41 @@ class Loan_Portfolio:
             self,
             discount_rate,
             loan_df,
-            cashflows_dataframe=None,
-            aggregate_flows_df=None,
-            tranchwise_flow_df=None
+            wac,
+            T,
+            notional,
+            r0,
+            kappa,
+            r_bar,
+            sigma,
+            simulations=5
     ):
         # Assuming single discount rate at time t0 for NPV calculation/to get price
         self.discount_rate = discount_rate
+
+        self.wac = wac
+        self.T = T
+        self.notional = notional
+        self.r0 = r0
+        self.kappa = kappa
+        self.r_bar = r_bar
+        self.sigma = sigma
+        self.simulations = simulations
+
         # initialize loan dataframe; Current principal bal, interest rate and term from loan database
         self.loan_df = loan_df[['Current_Principal_Balance', 'Current_Interest_Rate', 'Remaining_Term',
                                 'adjusted_cdr', 'adjusted_cpr', 'adjusted_recovery', 'Original_Term', 'tranch_level',
                                 'Original_Amount']]
 
         # create cashflow dataframe for entire loan portfolio with the following columns
-        if cashflows_dataframe is None:
-            self.cashflows_dataframe = self.cash_flows_data_frame_for_portfolio()
-            self.cashflows_dataframe['loss'] = self.cashflow_loss()
-            self.cashflows_dataframe['total_interest'] = self.total_interests_for_cash_flow()
-            self.cashflows_dataframe['total_principal'] = self.total_principals_for_cash_flow()
-            self.cashflows_dataframe['total_payments'] = self.total_payments_for_cash_flow()
-        else:
-            self.cashflows_dataframe = cashflows_dataframe
+        self.cashflows_dataframe = self.cash_flows_data_frame_for_portfolio()
+        self.cashflows_dataframe['loss'] = self.cashflow_loss()
+        self.cashflows_dataframe['total_interest'] = self.total_interests_for_cash_flow()
+        self.cashflows_dataframe['total_principal'] = self.total_principals_for_cash_flow()
+        self.cashflows_dataframe['total_payments'] = self.total_payments_for_cash_flow()
 
-        self.aggregate_flows_df = aggregate_flows_df
-        self.tranchwise_flow_df = tranchwise_flow_df
+        self.aggregate_flows_df = None
+        self.tranchwise_flow_df = None
 
     # create cashflow dataframe for the entire portfolio
     def cash_flows_data_frame_for_portfolio(self):
@@ -48,8 +60,7 @@ class Loan_Portfolio:
         cash_flows_data_frame = pd.DataFrame(cash_flows_list_dicts)
         return cash_flows_data_frame
 
-    @staticmethod
-    def generate_loan_cash_flows(loan):
+    def generate_loan_cash_flows(self, loan):
         # individual loan passed as an argument
         loan_pk = int(loan.name)
         orig_bal = float(loan['Current_Principal_Balance'])
@@ -61,6 +72,7 @@ class Loan_Portfolio:
         original_term = float(loan['Original_Term'])
         tranche = float(loan['tranch_level'])
         principal = float(loan['Current_Principal_Balance'])
+
         # payment schedule for loan function created later. check
         cash_flows_list_of_dicts = payment_schedule_for_loan(
             loan_df_pk=loan_pk,
@@ -72,7 +84,15 @@ class Loan_Portfolio:
             recovery_percentage=recov_percent,
             N=original_term,
             tranche=tranche,
-            principal=principal
+            principal=principal,
+            wac=self.wac,
+            T=self.T,
+            notional=self.notional,
+            r0=self.r0,
+            kappa=self.kappa,
+            r_bar=self.r_bar,
+            sigma=self.sigma,
+            simulations=self.simulations
         )
         return cash_flows_list_of_dicts
 
@@ -372,7 +392,6 @@ class Loan_Portfolio:
         period_list.append(period_0)
         senior_prin, junior_prin, net_int_tranch_senior, net_int_tranch_junior = 0, 0, 0, 0
 
-        wac = self.loan_df["Current_Interest_Rate"].mean()
         while j < N:
             if tranch_senior_outstanding_bal < 0:
                 tranch_senior_outstanding_bal = 0
@@ -385,7 +404,16 @@ class Loan_Portfolio:
             principal_tranch_senior = mortgage_pay_tranch_senior - net_int_tranch_senior
             principal_tranch_junior = mortgage_pay_tranch_junior - net_int_tranch_junior
 
-            paths = L.generate_CPR(wac=wac, simulations=5)
+            paths = L.generate_CPR(
+                wac=self.wac,
+                T=self.T,
+                notional=self.notional,
+                r0=self.r0,
+                kappa=self.kappa,
+                r_bar=self.r_bar,
+                sigma=self.sigma,
+                simulations=self.simulations
+            )
             cpr = np.mean(paths, axis=0)[j]
 
             prepayment_senior = tranch_senior_outstanding_bal * cpr / 12
@@ -496,8 +524,17 @@ class Loan_Portfolio:
         return final_df
 
 
-def payment_schedule_for_loan(loan_df_pk, original_balance, interest_rate, maturity, cdr, cpr, recovery_percentage, N,
-                              tranche, principal):
+def payment_schedule_for_loan(
+        loan_df_pk, original_balance, interest_rate, maturity, cdr, cpr, recovery_percentage, N, tranche, principal,
+        wac,
+        T,
+        notional,
+        r0,
+        kappa,
+        r_bar,
+        sigma,
+        simulations
+):
     """ Creates a payment schedule or cash flows for a loan.
     Payment schedules are presented as a list of "period" dictionaries. Each period representing one period
     of the maturity or term. A O period is created to represent the outflow of acquiring the loan. All
@@ -554,7 +591,15 @@ def payment_schedule_for_loan(loan_df_pk, original_balance, interest_rate, matur
 
         period = create_payment_schedule_period(
             loan_df_pk, last_period['end_balance'], last_period['remaining_term'] - 1,
-            cdr, cpr, i, interest_rate, recovery_percentage, N, tranche, principal
+            cdr, cpr, i, interest_rate, recovery_percentage, N, tranche, principal,
+            wac,
+            T,
+            notional,
+            r0,
+            kappa,
+            r_bar,
+            sigma,
+            simulations
         )
         period_list[i] = period
 
@@ -563,7 +608,15 @@ def payment_schedule_for_loan(loan_df_pk, original_balance, interest_rate, matur
 
 def create_payment_schedule_period(
         loan_df_pk, start_balance, remaining_term,
-        cdr, cpr, period_num, interest_rate, recovery_percentage, N, tranche, principal):
+        cdr, cpr, period_num, interest_rate, recovery_percentage, N, tranche, principal,
+        wac,
+        T,
+        notional,
+        r0,
+        kappa,
+        r_bar,
+        sigma,
+        simulations):
     """ Create a period and associated information for a loan's payment schedule or cash flows.
     Args:
         loan_df_pk: The loan primary key.
@@ -595,7 +648,14 @@ def create_payment_schedule_period(
         payment = start_balance
     scheduled_principal = payment - interest
 
-    paths = L.generate_CPR(simulations=5)
+    paths = L.generate_CPR(wac,
+                           T,
+                           notional,
+                           r0,
+                           kappa,
+                           r_bar,
+                           sigma,
+                           simulations)
     cpr = np.mean(paths, axis=0)[period_num]
 
     prepayment = start_balance * cpr / 12
